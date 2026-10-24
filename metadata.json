@@ -1,0 +1,6 @@
+{
+  "name": "IPL Auction Arena — Multiplayer Cricket Auction Simulator",
+  "description": "Real-time multiplayer IPL Auction simulator where friends choose franchises, retain star players, and engage in live synchronized bidding to complete their ultimate squads.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

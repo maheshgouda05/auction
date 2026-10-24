@@ -1,0 +1,127 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Pillar 1)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Primitive Helpers
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isRoomHost(roomId) {
+      return isSignedIn() && get(/databases/$(database)/documents/rooms/$(roomId)).data.hostId == request.auth.uid;
+    }
+
+    function isValidRoom(data) {
+      return data.id is string && data.id.size() <= 64 &&
+             data.code is string && data.code.size() <= 16 &&
+             data.hostId is string && data.hostId.size() <= 128 &&
+             data.status is string && data.status.size() <= 32 &&
+             data.format is string && data.format.size() <= 32;
+    }
+
+    function isValidParticipant(data) {
+      return data.id is string && data.id.size() <= 128 &&
+             data.displayName is string && data.displayName.size() <= 64 &&
+             data.isReady is bool;
+    }
+
+    function isValidTeamState(data) {
+      return data.teamId is string && data.teamId.size() <= 32 &&
+             data.teamCode is string && data.teamCode.size() <= 16 &&
+             data.startingPurse is number && data.startingPurse >= 0 &&
+             data.remainingPurse is number && data.remainingPurse >= 0;
+    }
+
+    function isValidMessage(data) {
+      return data.id is string && data.id.size() <= 64 &&
+             data.senderId is string && data.senderId.size() <= 128 &&
+             data.text is string && data.text.size() <= 1000 &&
+             data.timestamp is number;
+    }
+
+    // Rooms Collection
+    match /rooms/{roomId} {
+      allow get: if isSignedIn() && isValidId(roomId);
+      allow list: if isSignedIn();
+      allow create: if isSignedIn() && isValidId(roomId) &&
+                    isValidRoom(incoming()) &&
+                    incoming().hostId == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(roomId) &&
+                    isValidRoom(incoming()) &&
+                    (
+                      // Host can update room state, rules, round state
+                      (existing().hostId == request.auth.uid) ||
+                      // Or participants updating live auction bid during active round
+                      (
+                        incoming().diff(existing()).affectedKeys().hasOnly(['currentAuctionState', 'updatedAt']) &&
+                        (incoming().currentAuctionState.highestBidderUserId == request.auth.uid || isRoomHost(roomId))
+                      )
+                    );
+      allow delete: if isSignedIn() && isValidId(roomId) && existing().hostId == request.auth.uid;
+
+      // Subcollection: Participants
+      match /participants/{participantId} {
+        allow get, list: if isSignedIn() && isValidId(roomId);
+        allow create, update: if isSignedIn() && isValidId(roomId) && isValidId(participantId) &&
+                              isValidParticipant(incoming()) &&
+                              (participantId == request.auth.uid || isRoomHost(roomId));
+        allow delete: if isSignedIn() && isValidId(roomId) && isValidId(participantId) &&
+                      (participantId == request.auth.uid || isRoomHost(roomId));
+      }
+
+      // Subcollection: Team States
+      match /teamStates/{teamId} {
+        allow get, list: if isSignedIn() && isValidId(roomId);
+        // Only host or authorized franchise claimer can update
+        allow create: if isSignedIn() && isValidId(roomId) && isValidId(teamId) &&
+                      isValidTeamState(incoming()) &&
+                      isRoomHost(roomId);
+        allow update: if isSignedIn() && isValidId(roomId) && isValidId(teamId) &&
+                      isValidTeamState(incoming()) &&
+                      (
+                        // Host has full administrative authority
+                        isRoomHost(roomId) ||
+                        // User claiming an unclaimed or available team
+                        ((!('ownerId' in existing()) || existing().ownerId == null || existing().ownerId == '') && incoming().ownerId == request.auth.uid) ||
+                        // User releasing their own team
+                        (existing().ownerId == request.auth.uid && (incoming().ownerId == null || incoming().ownerId == '')) ||
+                        // User locking retentions or updating active status for their own team
+                        (existing().ownerId == request.auth.uid && incoming().ownerId == request.auth.uid)
+                      );
+        allow delete: if isSignedIn() && isValidId(roomId) && isRoomHost(roomId);
+      }
+
+      // Subcollection: Messages
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() && isValidId(roomId);
+        allow create: if isSignedIn() && isValidId(roomId) && isValidId(messageId) &&
+                      isValidMessage(incoming()) &&
+                      incoming().senderId == request.auth.uid;
+        allow update, delete: if false;
+      }
+    }
+
+    // Players Collection (Read-only catalog for clients, writable by signed-in users for custom imports)
+    match /players/{playerId} {
+      allow get, list: if isSignedIn() && isValidId(playerId);
+      allow write: if isSignedIn() && isValidId(playerId);
+    }
+  }
+}

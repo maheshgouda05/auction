@@ -1,0 +1,119 @@
+{
+  "entities": {
+    "Room": {
+      "title": "Auction Room",
+      "description": "Represents an IPL auction room session with settings and live auction state.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "code": { "type": "string" },
+        "name": { "type": "string" },
+        "hostId": { "type": "string" },
+        "hostName": { "type": "string" },
+        "status": { "type": "string" },
+        "format": { "type": "string" },
+        "rules": { "type": "object" },
+        "currentAuctionState": { "type": "object" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "code", "hostId", "status", "format"]
+    },
+    "Participant": {
+      "title": "Room Participant",
+      "description": "A user participating in an auction room with team selection and readiness status.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "isHost": { "type": "boolean" },
+        "selectedTeamId": { "type": "string" },
+        "isReady": { "type": "boolean" },
+        "isOnline": { "type": "boolean" },
+        "lastActive": { "type": "number" }
+      },
+      "required": ["id", "displayName", "isReady"]
+    },
+    "TeamState": {
+      "title": "Franchise Auction State",
+      "description": "The purse, retained players, bought roster, and limits for an IPL franchise in a room.",
+      "type": "object",
+      "properties": {
+        "teamId": { "type": "string" },
+        "teamCode": { "type": "string" },
+        "teamName": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "ownerName": { "type": "string" },
+        "isBot": { "type": "boolean" },
+        "startingPurse": { "type": "number" },
+        "spentPurse": { "type": "number" },
+        "remainingPurse": { "type": "number" },
+        "retainedPlayers": { "type": "array" },
+        "boughtPlayers": { "type": "array" },
+        "totalSquadCount": { "type": "number" },
+        "overseasCount": { "type": "number" },
+        "rtmRemaining": { "type": "number" },
+        "isRetentionLocked": { "type": "boolean" }
+      },
+      "required": ["teamId", "teamCode", "startingPurse", "remainingPurse"]
+    },
+    "Message": {
+      "title": "Room Chat Message",
+      "description": "Lobby and live auction chat message or auction log alert.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "teamCode": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "isSystem": { "type": "boolean" }
+      },
+      "required": ["id", "senderId", "text", "timestamp"]
+    },
+    "PlayerPool": {
+      "title": "Auction Player",
+      "description": "Player record eligible for IPL auction with role, stats, and base price.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "nationality": { "type": "string" },
+        "isOverseas": { "type": "boolean" },
+        "battingStyle": { "type": "string" },
+        "bowlingStyle": { "type": "string" },
+        "basePriceCr": { "type": "number" },
+        "category": { "type": "string" },
+        "originalTeam": { "type": "string" },
+        "image": { "type": "string" },
+        "verifiedCutoff": { "type": "string" }
+      },
+      "required": ["id", "name", "role", "basePriceCr"]
+    }
+  },
+  "firestore": {
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Active and completed IPL auction rooms"
+    },
+    "/rooms/{roomId}/participants/{participantId}": {
+      "schema": "Participant",
+      "description": "Users joined in the room"
+    },
+    "/rooms/{roomId}/teamStates/{teamId}": {
+      "schema": "TeamState",
+      "description": "Purse and squad state for each IPL franchise in the room"
+    },
+    "/rooms/{roomId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Lobby and live room commentary and chat messages"
+    },
+    "/players/{playerId}": {
+      "schema": "PlayerPool",
+      "description": "Official and custom player pool entries"
+    }
+  }
+}
