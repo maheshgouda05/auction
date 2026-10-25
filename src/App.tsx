@@ -44,8 +44,27 @@ export default function App() {
   const [teamStates, setTeamStates] = useState<TeamState[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [playerPool, setPlayerPool] = useState<Player[]>(INITIAL_PLAYER_POOL);
-  const [unsoldPlayers, setUnsoldPlayers] = useState<Player[]>([]);
   const [globalError, setGlobalError] = useState<string | null>(null);
+
+  // Phone Theme State (default true for authentic mobile-first phone theme)
+  const [isPhoneTheme, setIsPhoneTheme] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('ipl_phone_theme');
+      if (saved !== null) return saved === 'true';
+      return true; // Default to phone theme
+    }
+    return true;
+  });
+
+  const handleTogglePhoneTheme = () => {
+    setIsPhoneTheme((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('ipl_phone_theme', String(next));
+      } catch {}
+      return next;
+    });
+  };
 
   const botTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -1138,6 +1157,9 @@ export default function App() {
     : null;
   const currentIndex = room ? (currentPlayer ? playerPool.findIndex(p => p.id === currentPlayer.id) : room.currentAuctionState.currentPlayerIndex) : 0;
   const upcomingPlayers = room ? playerPool.slice(currentIndex + 1, currentIndex + 5) : [];
+  const unsoldPlayers = room
+    ? playerPool.filter(p => room.currentAuctionState.unsoldPlayerIds?.includes(p.id) || p.status === 'unsold')
+    : [];
 
   if (authLoading) {
     return (
@@ -1151,18 +1173,39 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-amber-500 selection:text-slate-950">
-      {/* Top Navbar Header */}
-      <Header
-        room={room}
-        myTeam={myTeam}
-        currentUser={currentUser}
-        onOpenSquads={() => setShowSquadModal(true)}
-        onOpenPlayerManager={() => setShowPlayerModal(true)}
-        onSignOut={() => signOut(auth)}
-        onOpenAuth={() => setShowAuthModal(true)}
-        onLeaveRoom={handleLeaveAuction}
-      />
+    <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-amber-500 selection:text-slate-950 ${isPhoneTheme ? 'md:bg-slate-900/50 md:py-6 md:px-4 md:items-center md:justify-start' : ''}`}>
+      {/* Phone Theme Device Frame on Desktop / Native Responsive on Mobile */}
+      <div className={`w-full flex-1 flex flex-col ${isPhoneTheme ? 'md:max-w-[425px] md:min-h-[880px] md:max-h-[92vh] md:rounded-[44px] md:border-[9px] md:border-slate-800 md:shadow-[0_25px_70px_rgba(0,0,0,0.9)] md:overflow-y-auto bg-slate-950 relative scrollbar-none' : ''}`}>
+        
+        {/* Dynamic Island & Status Bar (Desktop Phone Mode) */}
+        {isPhoneTheme && (
+          <div className="hidden md:flex items-center justify-between px-6 pt-3 pb-1.5 text-[11px] font-semibold text-slate-300 bg-slate-950 sticky top-0 z-50 select-none border-b border-slate-900/60">
+            <span>9:41</span>
+            {/* Dynamic Island */}
+            <div className="w-24 h-4 bg-slate-900 rounded-full flex items-center justify-center gap-1.5 px-2 shadow-inner">
+              <div className="w-2 h-2 rounded-full bg-slate-950" />
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
+              <span>5G</span>
+              <span>100%</span>
+            </div>
+          </div>
+        )}
+
+        {/* Top Navbar Header */}
+        <Header
+          room={room}
+          myTeam={myTeam}
+          currentUser={currentUser}
+          isPhoneTheme={isPhoneTheme}
+          onTogglePhoneTheme={handleTogglePhoneTheme}
+          onOpenSquads={() => setShowSquadModal(true)}
+          onOpenPlayerManager={() => setShowPlayerModal(true)}
+          onSignOut={() => signOut(auth)}
+          onOpenAuth={() => setShowAuthModal(true)}
+          onLeaveRoom={handleLeaveAuction}
+        />
 
       {globalError && (
         <div className="max-w-4xl mx-auto my-3 px-4 w-full">
@@ -1350,6 +1393,14 @@ export default function App() {
         playerPool={playerPool}
         onUpdatePlayerPool={setPlayerPool}
       />
+
+        {/* Phone Bottom Home Indicator (Desktop Phone Mode) */}
+        {isPhoneTheme && (
+          <div className="hidden md:block py-2 bg-slate-950 shrink-0 sticky bottom-0 z-50">
+            <div className="w-32 h-1 bg-slate-700/80 rounded-full mx-auto" />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
