@@ -65,6 +65,7 @@ export interface AcquiredPlayer {
   isRetained?: boolean;
   isRtm?: boolean;
   round?: number;
+  nationality?: string;
 }
 
 export interface TeamState {

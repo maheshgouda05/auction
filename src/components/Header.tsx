@@ -141,21 +141,6 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden md:inline">Players</span>
             </button>
 
-            {onTogglePhoneTheme && (
-              <button
-                onClick={onTogglePhoneTheme}
-                title={isPhoneTheme ? 'Switch to Standard Desktop View' : 'Switch to Mobile Phone Theme'}
-                className={`p-1.5 sm:px-2.5 sm:py-1 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all ${
-                  isPhoneTheme
-                    ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-sm'
-                    : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700'
-                }`}
-              >
-                <Smartphone className={`w-4 h-4 ${isPhoneTheme ? 'text-amber-400' : 'text-slate-400'}`} />
-                <span className="hidden sm:inline">{isPhoneTheme ? 'Phone View' : 'Phone Theme'}</span>
-              </button>
-            )}
-
             <button
               onClick={toggleSound}
               title={soundOn ? 'Mute Sounds' : 'Unmute Sounds'}

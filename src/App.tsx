@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { User, signOut } from 'firebase/auth';
 import {
   doc, collection, onSnapshot, setDoc, updateDoc,
@@ -15,9 +15,11 @@ import {
   AcquiredPlayer, LiveAuctionState
 } from './types';
 import { IPL_TEAMS, getTeamById } from './data/teams';
-import { INITIAL_PLAYER_POOL, IPL_2026_OFFICIAL_RETAINED_ROSTERS } from './data/players';
+import { INITIAL_PLAYER_POOL } from './data/players';
+import { PREVIOUS_SEASON_SQUADS } from './data/retentionRosters';
 import { OFFICIAL_RULES_PRESETS, getNextBidAmount, validateBid } from './utils/rulesEngine';
 import { evaluateBotBid, evaluateBotRtm } from './utils/aiBidder';
+import { exactAddCr, exactSubtractCr, formatPrice, formatPurse } from './utils/currency';
 import { Header } from './components/Header';
 import { AuthModal } from './components/AuthModal';
 import { CreateOrJoinModal } from './components/CreateOrJoinModal';
@@ -518,14 +520,16 @@ export default function App() {
     const isMini = finalRules.format === 'mini';
     for (const team of IPL_TEAMS) {
       const startingPurse = isMini ? (team.miniAuction2026PurseCr || finalRules.startingPurseCr) : finalRules.startingPurseCr;
-      const officialRetained = isMini ? (IPL_2026_OFFICIAL_RETAINED_ROSTERS[team.id] || []).map(p => ({
+      const squadList = PREVIOUS_SEASON_SQUADS[team.id] || [];
+      const officialRetained: AcquiredPlayer[] = isMini ? squadList.slice(0, 4).map(p => ({
         playerId: p.id,
         name: p.name,
         role: p.role,
-        priceCr: p.basePriceCr,
+        priceCr: p.fixedRetentionPriceCr,
         isOverseas: p.isOverseas,
         image: p.image,
-        isRetained: true
+        isRetained: true,
+        nationality: p.nationality
       })) : [];
       const overseasRetained = officialRetained.filter(p => p.isOverseas).length;
 
@@ -803,8 +807,8 @@ export default function App() {
     const myTeam = teamStates.find(t => t.ownerId === currentUser.uid);
     if (!myTeam) return;
 
-    const totalCost = retainedPlayers.reduce((acc, p) => acc + p.priceCr, 0);
-    const newRemainingPurse = Number((myTeam.startingPurse - totalCost).toFixed(2));
+    const totalCost = retainedPlayers.reduce((acc, p) => exactAddCr(acc, p.priceCr), 0);
+    const newRemainingPurse = exactSubtractCr(myTeam.startingPurse, totalCost);
     const overseasCount = retainedPlayers.filter(p => p.isOverseas).length;
     const rtmRemaining = Math.max(0, (room?.rules.maxRetentions || 6) - retainedPlayers.length);
 
@@ -833,7 +837,7 @@ export default function App() {
   // Launch Live Auction after Retentions
   const handleLaunchLiveAuction = async () => {
     if (!activeRoomId || !room) return;
-    const firstPlayer = playerPool[0];
+    const firstPlayer = effectiveAuctionPool[0] || playerPool[0];
 
     await updateDoc(doc(db, 'rooms', activeRoomId), {
       status: 'auction',
@@ -943,7 +947,9 @@ export default function App() {
       const winningTeamId = auctionState.highestBidderTeamId;
       if (!winningTeamId) return;
 
-      const curPlayer = playerPool.find(p => p.id === auctionState.currentPlayerId) || playerPool[auctionState.currentPlayerIndex];
+      const curPlayer = effectiveAuctionPool.find(p => p.id === auctionState.currentPlayerId) ||
+                        playerPool.find(p => p.id === auctionState.currentPlayerId) ||
+                        playerPool[auctionState.currentPlayerIndex];
       if (!curPlayer) return;
 
       const teamRef = doc(db, 'rooms', activeRoomId, 'teamStates', winningTeamId);
@@ -960,12 +966,13 @@ export default function App() {
         isOverseas: curPlayer.isOverseas,
         image: curPlayer.image || '',
         isRetained: false,
-        isRtm
+        isRtm,
+        nationality: curPlayer.nationality || (curPlayer.isOverseas ? 'Overseas' : 'India')
       };
 
       const newBoughtList = [...winningTeam.boughtPlayers, boughtPlayer];
-      const newSpentPurse = Number((winningTeam.spentPurse + auctionState.currentBidCr).toFixed(2));
-      const newRemainingPurse = Number((winningTeam.startingPurse - newSpentPurse).toFixed(2));
+      const newSpentPurse = exactAddCr(winningTeam.spentPurse, auctionState.currentBidCr);
+      const newRemainingPurse = exactSubtractCr(winningTeam.startingPurse, newSpentPurse);
       const newOverseasCount = winningTeam.overseasCount + (curPlayer.isOverseas ? 1 : 0);
       const newTotalSquad = winningTeam.totalSquadCount + 1;
 
@@ -1005,7 +1012,9 @@ export default function App() {
         return;
       }
 
-      const curPlayer = playerPool.find(p => p.id === auctionState.currentPlayerId) || playerPool[auctionState.currentPlayerIndex];
+      const curPlayer = effectiveAuctionPool.find(p => p.id === auctionState.currentPlayerId) ||
+                        playerPool.find(p => p.id === auctionState.currentPlayerId) ||
+                        playerPool[auctionState.currentPlayerIndex];
       if (!curPlayer) return;
 
       const autoAdvanceDeadline = Date.now() + 3500;
@@ -1039,7 +1048,7 @@ export default function App() {
       const nextIndex = curAuction.currentPlayerIndex + 1;
 
       // If all players completed, finish auction
-      if (nextIndex >= playerPool.length) {
+      if (nextIndex >= effectiveAuctionPool.length) {
         transaction.update(roomRef, {
           status: 'completed',
           'currentAuctionState.roundStatus': 'idle',
@@ -1049,7 +1058,7 @@ export default function App() {
         return;
       }
 
-      const nextPlayer = playerPool[nextIndex];
+      const nextPlayer = effectiveAuctionPool[nextIndex];
       const newDeadline = Date.now() + roomData.rules.timerSeconds * 1000;
 
       transaction.update(roomRef, {
@@ -1152,13 +1161,30 @@ export default function App() {
 
   const myTeam = teamStates.find(t => t.ownerId === currentUser?.uid) || null;
   const isHost = room ? room.hostId === currentUser?.uid : false;
+
+  // Deduplicate and filter out any players that have been retained by ANY franchise
+  const effectiveAuctionPool = useMemo(() => {
+    const retainedIds = new Set(
+      teamStates.flatMap(t => (t.retainedPlayers || []).map(p => p.playerId.toLowerCase()))
+    );
+    const retainedNames = new Set(
+      teamStates.flatMap(t => (t.retainedPlayers || []).map(p => p.name.toLowerCase().replace(/\s*\(c\)|\s*\(trade\)/gi, '').trim()))
+    );
+
+    return playerPool.filter(p => {
+      const normId = p.id.toLowerCase();
+      const normName = p.name.toLowerCase().replace(/\s*\(c\)|\s*\(trade\)/gi, '').trim();
+      return !retainedIds.has(normId) && !retainedNames.has(normName);
+    });
+  }, [playerPool, teamStates]);
+
   const currentPlayer = room
-    ? (playerPool.find(p => p.id === room.currentAuctionState.currentPlayerId) || playerPool[room.currentAuctionState.currentPlayerIndex] || null)
+    ? (effectiveAuctionPool.find(p => p.id === room.currentAuctionState.currentPlayerId) || effectiveAuctionPool[room.currentAuctionState.currentPlayerIndex] || null)
     : null;
-  const currentIndex = room ? (currentPlayer ? playerPool.findIndex(p => p.id === currentPlayer.id) : room.currentAuctionState.currentPlayerIndex) : 0;
-  const upcomingPlayers = room ? playerPool.slice(currentIndex + 1, currentIndex + 5) : [];
+  const currentIndex = room ? (currentPlayer ? effectiveAuctionPool.findIndex(p => p.id === currentPlayer.id) : room.currentAuctionState.currentPlayerIndex) : 0;
+  const upcomingPlayers = room ? effectiveAuctionPool.slice(currentIndex + 1, currentIndex + 5) : [];
   const unsoldPlayers = room
-    ? playerPool.filter(p => room.currentAuctionState.unsoldPlayerIds?.includes(p.id) || p.status === 'unsold')
+    ? effectiveAuctionPool.filter(p => room.currentAuctionState.unsoldPlayerIds?.includes(p.id) || p.status === 'unsold')
     : [];
 
   if (authLoading) {
@@ -1173,39 +1199,18 @@ export default function App() {
   }
 
   return (
-    <div className={`min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-amber-500 selection:text-slate-950 ${isPhoneTheme ? 'md:bg-slate-900/50 md:py-6 md:px-4 md:items-center md:justify-start' : ''}`}>
-      {/* Phone Theme Device Frame on Desktop / Native Responsive on Mobile */}
-      <div className={`w-full flex-1 flex flex-col ${isPhoneTheme ? 'md:max-w-[425px] md:min-h-[880px] md:max-h-[92vh] md:rounded-[44px] md:border-[9px] md:border-slate-800 md:shadow-[0_25px_70px_rgba(0,0,0,0.9)] md:overflow-y-auto bg-slate-950 relative scrollbar-none' : ''}`}>
-        
-        {/* Dynamic Island & Status Bar (Desktop Phone Mode) */}
-        {isPhoneTheme && (
-          <div className="hidden md:flex items-center justify-between px-6 pt-3 pb-1.5 text-[11px] font-semibold text-slate-300 bg-slate-950 sticky top-0 z-50 select-none border-b border-slate-900/60">
-            <span>9:41</span>
-            {/* Dynamic Island */}
-            <div className="w-24 h-4 bg-slate-900 rounded-full flex items-center justify-center gap-1.5 px-2 shadow-inner">
-              <div className="w-2 h-2 rounded-full bg-slate-950" />
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            </div>
-            <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
-              <span>5G</span>
-              <span>100%</span>
-            </div>
-          </div>
-        )}
-
-        {/* Top Navbar Header */}
-        <Header
-          room={room}
-          myTeam={myTeam}
-          currentUser={currentUser}
-          isPhoneTheme={isPhoneTheme}
-          onTogglePhoneTheme={handleTogglePhoneTheme}
-          onOpenSquads={() => setShowSquadModal(true)}
-          onOpenPlayerManager={() => setShowPlayerModal(true)}
-          onSignOut={() => signOut(auth)}
-          onOpenAuth={() => setShowAuthModal(true)}
-          onLeaveRoom={handleLeaveAuction}
-        />
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-amber-500 selection:text-slate-950">
+      {/* Top Navbar Header */}
+      <Header
+        room={room}
+        myTeam={myTeam}
+        currentUser={currentUser}
+        onOpenSquads={() => setShowSquadModal(true)}
+        onOpenPlayerManager={() => setShowPlayerModal(true)}
+        onSignOut={() => signOut(auth)}
+        onOpenAuth={() => setShowAuthModal(true)}
+        onLeaveRoom={handleLeaveAuction}
+      />
 
       {globalError && (
         <div className="max-w-4xl mx-auto my-3 px-4 w-full">
@@ -1313,7 +1318,6 @@ export default function App() {
           <RetentionView
             room={room}
             teamStates={teamStates}
-            allPlayers={playerPool}
             currentUserId={currentUser?.uid || ''}
             isHost={isHost}
             onLockRetentions={handleLockRetentions}
@@ -1393,14 +1397,6 @@ export default function App() {
         playerPool={playerPool}
         onUpdatePlayerPool={setPlayerPool}
       />
-
-        {/* Phone Bottom Home Indicator (Desktop Phone Mode) */}
-        {isPhoneTheme && (
-          <div className="hidden md:block py-2 bg-slate-950 shrink-0 sticky bottom-0 z-50">
-            <div className="w-32 h-1 bg-slate-700/80 rounded-full mx-auto" />
-          </div>
-        )}
-      </div>
     </div>
   );
 }
