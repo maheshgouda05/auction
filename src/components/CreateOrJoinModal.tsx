@@ -21,7 +21,7 @@ export const CreateOrJoinModal: React.FC<CreateOrJoinModalProps> = ({
   const [joinCode, setJoinCode] = useState('');
   const [roomName, setRoomName] = useState('Premier IPL Auction');
   const [format, setFormat] = useState<'mini' | 'mega'>('mini'); // Default to 2026 Mini Auction
-  const [timerSeconds, setTimerSeconds] = useState(15);
+  const [timerSeconds, setTimerSeconds] = useState(16);
   const [aiDifficulty, setAiDifficulty] = useState<'easy' | 'normal' | 'competitive'>('normal');
   const [aiFillBots, setAiFillBots] = useState(false); // DEFAULT MUST BE FALSE (Human-Only)
   const [loading, setLoading] = useState(false);
@@ -234,7 +234,7 @@ export const CreateOrJoinModal: React.FC<CreateOrJoinModalProps> = ({
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl py-2 px-2.5 text-xs text-white focus:outline-none"
                 >
                   <option value={10}>10 Seconds (Fast)</option>
-                  <option value={15}>15 Seconds (Standard)</option>
+                  <option value={16}>16 Seconds (Official)</option>
                   <option value={20}>20 Seconds (Relaxed)</option>
                   <option value={30}>30 Seconds (Strategic)</option>
                 </select>

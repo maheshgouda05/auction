@@ -7,7 +7,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { User, signOut } from 'firebase/auth';
 import {
   doc, collection, onSnapshot, setDoc, updateDoc,
-  deleteDoc, runTransaction, getDocs, query, orderBy, limit
+  deleteDoc, runTransaction, getDocs, getDoc, query, orderBy, limit
 } from 'firebase/firestore';
 import { auth, db, testConnection, handleFirestoreError, OperationType, checkRedirectResult } from './lib/firebase';
 import {
@@ -49,6 +49,67 @@ export default function App() {
 
   const botTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Reconnect Helper: Restore room on reload or handle 5-minute disconnect limit
+  const attemptReconnect = async (roomId: string, user: User) => {
+    try {
+      const roomDocRef = doc(db, 'rooms', roomId);
+      const roomSnap = await getDoc(roomDocRef);
+      if (!roomSnap.exists()) {
+        localStorage.removeItem('ipl_active_room_id');
+        localStorage.removeItem('ipl_room_code');
+        return;
+      }
+
+      const roomData = roomSnap.data() as Room;
+
+      // Check participant document
+      const partDocRef = doc(db, 'rooms', roomId, 'participants', user.uid);
+      const partSnap = await getDoc(partDocRef);
+
+      if (partSnap.exists()) {
+        const partData = partSnap.data() as Participant;
+
+        // 5-minute disconnect window check:
+        // "if a person exit from web then he should reconnect within 5 min autherwise he is through out of the web then he should login room using the code"
+        if (partData.disconnectedAt && (Date.now() - partData.disconnectedAt >= 5 * 60 * 1000)) {
+          // Disconnected for more than 5 minutes: clear room session!
+          localStorage.removeItem('ipl_active_room_id');
+          localStorage.removeItem('ipl_room_code');
+          setGlobalError(`Your session in room "${roomData.name}" (${roomData.code}) expired after 5 minutes of disconnection. Please rejoin using room code ${roomData.code}.`);
+          return;
+        }
+
+        // Reconnected within 5 minutes: mark active & online!
+        await updateDoc(partDocRef, {
+          isOnline: true,
+          disconnectedAt: null,
+          status: 'active',
+          lastActive: Date.now()
+        });
+
+        // If user held a franchise, reactivate it
+        if (partData.selectedTeamId) {
+          await updateDoc(doc(db, 'rooms', roomId, 'teamStates', partData.selectedTeamId), {
+            isActive: true,
+            status: 'active'
+          }).catch(() => {});
+        }
+
+        setActiveRoomId(roomId);
+        localStorage.setItem('ipl_active_room_id', roomId);
+        localStorage.setItem('ipl_room_code', roomData.code);
+        setGlobalError(null);
+      } else {
+        // Participant record does not exist
+        localStorage.removeItem('ipl_active_room_id');
+        localStorage.removeItem('ipl_room_code');
+      }
+    } catch (e) {
+      console.warn('Reconnect error:', e);
+      localStorage.removeItem('ipl_active_room_id');
+    }
+  };
+
   // 1. Initial Connection test, Redirect Auth processing & Auth Listener
   useEffect(() => {
     testConnection();
@@ -58,18 +119,31 @@ export default function App() {
       console.warn('Redirect auth check note:', err);
     });
 
-    const unsubAuth = auth.onAuthStateChanged((user) => {
+    const unsubAuth = auth.onAuthStateChanged(async (user) => {
       setCurrentUser(user);
       setAuthLoading(false);
 
-      // Check URL query parameters for ?room=CODE
-      const params = new URLSearchParams(window.location.search);
-      const roomCodeParam = params.get('room');
-      if (roomCodeParam && !activeRoomId) {
-        if (!user) {
+      if (user) {
+        // Check URL query parameters for ?room=CODE first
+        const params = new URLSearchParams(window.location.search);
+        const roomCodeParam = params.get('room');
+        if (roomCodeParam && !activeRoomId) {
+          await joinRoomByCode(roomCodeParam.toUpperCase(), user);
+          return;
+        }
+
+        // Otherwise check localStorage to auto-reconnect on page reload!
+        if (!activeRoomId) {
+          const savedRoomId = localStorage.getItem('ipl_active_room_id');
+          if (savedRoomId) {
+            await attemptReconnect(savedRoomId, user);
+          }
+        }
+      } else {
+        const params = new URLSearchParams(window.location.search);
+        const roomCodeParam = params.get('room');
+        if (roomCodeParam) {
           setShowAuthModal(true);
-        } else {
-          joinRoomByCode(roomCodeParam.toUpperCase());
         }
       }
     });
@@ -141,6 +215,95 @@ export default function App() {
       unsubMsgs();
     };
   }, [activeRoomId, currentUser]);
+
+  // Track Window Exits, Disconnects, and 5-minute Auto-Reconnect Window
+  useEffect(() => {
+    if (!activeRoomId || !currentUser) return;
+
+    const markDisconnected = () => {
+      try {
+        const partDocRef = doc(db, 'rooms', activeRoomId, 'participants', currentUser.uid);
+        setDoc(partDocRef, {
+          isOnline: false,
+          disconnectedAt: Date.now(),
+          status: 'disconnected',
+          lastActive: Date.now()
+        }, { merge: true });
+      } catch {
+        // Best effort
+      }
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        markDisconnected();
+      } else if (document.visibilityState === 'visible') {
+        // Regained focus / active again
+        try {
+          const partDocRef = doc(db, 'rooms', activeRoomId, 'participants', currentUser.uid);
+          setDoc(partDocRef, {
+            isOnline: true,
+            disconnectedAt: null,
+            status: 'active',
+            lastActive: Date.now()
+          }, { merge: true });
+        } catch {
+          // Best effort
+        }
+      }
+    };
+
+    window.addEventListener('beforeunload', markDisconnected);
+    window.addEventListener('pagehide', markDisconnected);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.removeEventListener('beforeunload', markDisconnected);
+      window.removeEventListener('pagehide', markDisconnected);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [activeRoomId, currentUser]);
+
+  // Periodic check: if any participant has been disconnected for > 5 minutes, mark timed_out and vacate/freeze franchise
+  useEffect(() => {
+    if (!activeRoomId || !room) return;
+
+    const interval = setInterval(async () => {
+      const now = Date.now();
+      for (const p of participants) {
+        if (!p.isOnline && p.disconnectedAt && (now - p.disconnectedAt >= 5 * 60 * 1000)) {
+          if (p.status !== 'timed_out' && p.status !== 'abandoned') {
+            try {
+              await updateDoc(doc(db, 'rooms', activeRoomId, 'participants', p.id), {
+                status: 'timed_out',
+                isOnline: false
+              });
+              if (p.selectedTeamId) {
+                if (room.status === 'lobby') {
+                  await updateDoc(doc(db, 'rooms', activeRoomId, 'teamStates', p.selectedTeamId), {
+                    ownerId: null,
+                    ownerName: 'Unclaimed',
+                    isBot: false,
+                    isActive: true,
+                    status: 'active'
+                  });
+                } else {
+                  await updateDoc(doc(db, 'rooms', activeRoomId, 'teamStates', p.selectedTeamId), {
+                    isActive: false,
+                    status: 'abandoned'
+                  });
+                }
+              }
+            } catch {
+              // Ignore
+            }
+          }
+        }
+      }
+    }, 20000);
+
+    return () => clearInterval(interval);
+  }, [activeRoomId, room?.status, participants]);
 
   // 3. AI Bot Bidding background loop (executed by Room Host)
   useEffect(() => {
@@ -215,42 +378,54 @@ export default function App() {
   ]);
 
   // Join Room by Code Helper
-  const joinRoomByCode = async (code: string) => {
-    if (!currentUser) {
+  const joinRoomByCode = async (code: string, userOverride?: User) => {
+    const user = userOverride || currentUser;
+    if (!user) {
       setShowAuthModal(true);
       return;
     }
     try {
       const q = query(collection(db, 'rooms'), limit(50));
       const snap = await getDocs(q);
-      let foundRoomId: string | null = null;
+      const roomDoc = snap.docs.find(d => (d.data() as Room).code === code);
 
-      snap.forEach((d) => {
-        const data = d.data() as Room;
-        if (data.code === code) {
-          foundRoomId = d.id;
-        }
-      });
-
-      if (!foundRoomId) {
+      if (!roomDoc) {
         throw new Error(`Room with code "${code}" was not found.`);
       }
 
-      // Add participant
-      const partDocRef = doc(db, 'rooms', foundRoomId, 'participants', currentUser.uid);
+      const foundRoomId = roomDoc.id;
+      const foundRoom = roomDoc.data() as Room;
+
+      // Check existing participant record
+      const partDocRef = doc(db, 'rooms', foundRoomId, 'participants', user.uid);
+      const existingPartSnap = await getDoc(partDocRef);
+      const existingPart = existingPartSnap.exists() ? (existingPartSnap.data() as Participant) : null;
+
       const participant: Participant = {
-        id: currentUser.uid,
-        displayName: currentUser.displayName || `Player_${currentUser.uid.slice(0, 4)}`,
-        photoURL: currentUser.photoURL || '',
-        isHost: false,
-        selectedTeamId: null,
-        isReady: false,
+        id: user.uid,
+        displayName: user.displayName || `Player_${user.uid.slice(0, 4)}`,
+        photoURL: user.photoURL || '',
+        isHost: foundRoom.hostId === user.uid,
+        selectedTeamId: existingPart?.selectedTeamId || null,
+        isReady: existingPart?.isReady || false,
         isOnline: true,
+        status: 'active',
+        disconnectedAt: null,
         lastActive: Date.now()
       };
       await setDoc(partDocRef, participant, { merge: true });
 
+      // If user had a selected franchise, restore it
+      if (participant.selectedTeamId) {
+        await updateDoc(doc(db, 'rooms', foundRoomId, 'teamStates', participant.selectedTeamId), {
+          isActive: true,
+          status: 'active'
+        }).catch(() => {});
+      }
+
       setActiveRoomId(foundRoomId);
+      localStorage.setItem('ipl_active_room_id', foundRoomId);
+      localStorage.setItem('ipl_room_code', code);
       setShowCreateJoinModal(false);
       setGlobalError(null);
     } catch (err: unknown) {
@@ -267,6 +442,11 @@ export default function App() {
 
     const roomId = `room_${Date.now()}_${Math.floor(Math.random() * 1000)}`;
     const randomCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const timerSeconds = rules.timerSeconds || 16;
+    const finalRules: AuctionRules = {
+      ...rules,
+      timerSeconds
+    };
 
     const initialAuctionState: LiveAuctionState = {
       currentPlayerIndex: 0,
@@ -276,7 +456,7 @@ export default function App() {
       highestBidderUserId: null,
       highestBidderName: null,
       bidHistory: [],
-      deadline: Date.now() + rules.timerSeconds * 1000,
+      deadline: Date.now() + timerSeconds * 1000,
       roundStatus: 'idle',
       totalSold: 0,
       totalUnsold: 0,
@@ -290,8 +470,8 @@ export default function App() {
       hostId: currentUser.uid,
       hostName: currentUser.displayName || 'Room Host',
       status: 'lobby',
-      format: rules.format,
-      rules,
+      format: finalRules.format,
+      rules: finalRules,
       currentAuctionState: initialAuctionState,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
@@ -309,14 +489,16 @@ export default function App() {
       selectedTeamId: null,
       isReady: false,
       isOnline: true,
+      status: 'active',
+      disconnectedAt: null,
       lastActive: Date.now()
     };
     await setDoc(doc(db, 'rooms', roomId, 'participants', currentUser.uid), hostPart);
 
     // 3. Initialize all 10 IPL Franchises as TeamState documents
-    const isMini = rules.format === 'mini';
+    const isMini = finalRules.format === 'mini';
     for (const team of IPL_TEAMS) {
-      const startingPurse = isMini ? (team.miniAuction2026PurseCr || rules.startingPurseCr) : rules.startingPurseCr;
+      const startingPurse = isMini ? (team.miniAuction2026PurseCr || finalRules.startingPurseCr) : finalRules.startingPurseCr;
       const officialRetained = isMini ? (IPL_2026_OFFICIAL_RETAINED_ROSTERS[team.id] || []).map(p => ({
         playerId: p.id,
         name: p.name,
@@ -334,7 +516,7 @@ export default function App() {
         teamName: team.name,
         ownerId: null,
         ownerName: 'Unclaimed',
-        isBot: rules.aiFillBots || false,
+        isBot: finalRules.aiFillBots || false,
         startingPurse,
         spentPurse: 0,
         remainingPurse: startingPurse,
@@ -342,7 +524,7 @@ export default function App() {
         boughtPlayers: [],
         totalSquadCount: officialRetained.length,
         overseasCount: overseasRetained,
-        rtmRemaining: rules.format === 'mega' ? rules.maxRtm : 0,
+        rtmRemaining: finalRules.format === 'mega' ? finalRules.maxRtm : 0,
         isRetentionLocked: isMini,
         isActive: true,
         status: 'active'
@@ -355,13 +537,15 @@ export default function App() {
       id: `msg_${Date.now()}`,
       senderId: currentUser.uid,
       senderName: 'System',
-      text: `Room created! Mode: ${rules.aiFillBots ? 'AI Bots Enabled' : 'Human-Only Multiplayer'}. Share code ${randomCode} with friends to join.`,
+      text: `Room created! Mode: ${finalRules.aiFillBots ? 'AI Bots Enabled' : 'Human-Only Multiplayer'}. Timer: ${timerSeconds}s. Share code ${randomCode} with friends to join.`,
       timestamp: Date.now(),
       isSystem: true
     };
     await setDoc(doc(db, 'rooms', roomId, 'messages', welcomeMsg.id), welcomeMsg);
 
     setActiveRoomId(roomId);
+    localStorage.setItem('ipl_active_room_id', roomId);
+    localStorage.setItem('ipl_room_code', randomCode);
     setShowCreateJoinModal(false);
   };
 
@@ -525,10 +709,14 @@ export default function App() {
 
       setActiveRoomId(null);
       setRoom(null);
+      localStorage.removeItem('ipl_active_room_id');
+      localStorage.removeItem('ipl_room_code');
     } catch (err: unknown) {
       console.error('Leave auction error:', err);
       setActiveRoomId(null);
       setRoom(null);
+      localStorage.removeItem('ipl_active_room_id');
+      localStorage.removeItem('ipl_room_code');
     }
   };
 
@@ -609,6 +797,17 @@ export default function App() {
       overseasCount,
       rtmRemaining,
       isRetentionLocked: true
+    });
+  };
+
+  // Unlock Retentions for Manual Editing
+  const handleUnlockRetentions = async () => {
+    if (!activeRoomId || !currentUser) return;
+    const myTeam = teamStates.find(t => t.ownerId === currentUser.uid);
+    if (!myTeam) return;
+
+    await updateDoc(doc(db, 'rooms', activeRoomId, 'teamStates', myTeam.teamId), {
+      isRetentionLocked: false
     });
   };
 
@@ -1071,9 +1270,11 @@ export default function App() {
           <RetentionView
             room={room}
             teamStates={teamStates}
+            allPlayers={playerPool}
             currentUserId={currentUser?.uid || ''}
             isHost={isHost}
             onLockRetentions={handleLockRetentions}
+            onUnlockRetentions={handleUnlockRetentions}
             onStartLiveAuction={handleLaunchLiveAuction}
           />
         ) : room.status === 'auction' ? (

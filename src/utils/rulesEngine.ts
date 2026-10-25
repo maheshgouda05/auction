@@ -11,7 +11,7 @@ export const OFFICIAL_RULES_PRESETS: Record<'mega' | 'mini', AuctionRules> = {
     maxOverseas: 8,
     maxRetentions: 0,
     maxRtm: 0,
-    timerSeconds: 15,
+    timerSeconds: 16, // Increased to 16 seconds
     aiDifficulty: 'normal',
     aiFillBots: false, // Default MUST be Human-Only
     isHumanOnly: true,
@@ -28,7 +28,7 @@ export const OFFICIAL_RULES_PRESETS: Record<'mega' | 'mini', AuctionRules> = {
     maxOverseas: 8,
     maxRetentions: 6,
     maxRtm: 6,
-    timerSeconds: 15,
+    timerSeconds: 16, // Increased to 16 seconds
     aiDifficulty: 'normal',
     aiFillBots: false, // Default MUST be Human-Only
     isHumanOnly: true,
@@ -36,6 +36,59 @@ export const OFFICIAL_RULES_PRESETS: Record<'mega' | 'mini', AuctionRules> = {
     minTeamsRequired: 2
   }
 };
+
+export interface PlayerTierInfo {
+  tier: 'marquee' | 'key' | 'core' | 'uncapped';
+  label: string;
+  recommendedPriceCr: number;
+  badgeClass: string;
+  ratingScore: number; // 0-100 rating scale
+}
+
+// Determines player rating tier and high retention price value
+export function getPlayerTier(player: Player): PlayerTierInfo {
+  if (player.category === 'Uncapped' || player.basePriceCr <= 0.40) {
+    return {
+      tier: 'uncapped',
+      label: 'Uncapped Star',
+      recommendedPriceCr: 4.0,
+      badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/40',
+      ratingScore: 68
+    };
+  }
+
+  const isHighStats = (player.seasonStats?.runs && player.seasonStats.runs > 1500) ||
+                      (player.seasonStats?.wickets && player.seasonStats.wickets > 30) ||
+                      player.basePriceCr >= 2.0;
+
+  if (player.category === 'Marquee' || (player.basePriceCr >= 2.0 && isHighStats)) {
+    return {
+      tier: 'marquee',
+      label: 'Top Tier 1 (Marquee Superstar)',
+      recommendedPriceCr: 18.0,
+      badgeClass: 'bg-amber-500/20 text-amber-300 border-amber-500/40',
+      ratingScore: 95
+    };
+  }
+
+  if (player.basePriceCr >= 1.5 || isHighStats) {
+    return {
+      tier: 'key',
+      label: 'Tier 2 (Key International / Star)',
+      recommendedPriceCr: 14.0,
+      badgeClass: 'bg-sky-500/20 text-sky-300 border-sky-500/40',
+      ratingScore: 84
+    };
+  }
+
+  return {
+    tier: 'core',
+    label: 'Tier 3 (Core Specialist)',
+    recommendedPriceCr: 11.0,
+    badgeClass: 'bg-purple-500/20 text-purple-300 border-purple-500/40',
+    ratingScore: 75
+  };
+}
 
 // Calculate next minimum valid bid increment
 export function getNextBidAmount(

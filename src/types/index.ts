@@ -22,6 +22,8 @@ export interface Player {
   age?: number;
   basePriceCr: number; // In Crores, e.g. 2.0, 1.5, 1.0, 0.75, 0.5, 0.3
   category: 'Marquee' | 'Batters' | 'All-Rounders' | 'Wicketkeepers' | 'Fast Bowlers' | 'Spinners' | 'Uncapped';
+  setNumber?: number;
+  setName?: string;
   originalTeam?: string; // Franchise ID (e.g. 'csk', 'mi', 'rcb')
   image: string;
   seasonStats?: PlayerStats;
@@ -31,6 +33,8 @@ export interface Player {
   soldPriceCr?: number;
   isVerified2026?: boolean;
 }
+
+export type PlayerData = Player;
 
 export interface IPLTeam {
   id: string;
@@ -91,7 +95,8 @@ export interface Participant {
   selectedTeamId: string | null;
   isReady: boolean;
   isOnline: boolean;
-  status?: 'active' | 'disconnected' | 'abandoned';
+  status?: 'active' | 'disconnected' | 'abandoned' | 'timed_out';
+  disconnectedAt?: number | null;
   lastActive: number;
 }
 

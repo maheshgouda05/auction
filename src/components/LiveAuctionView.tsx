@@ -177,14 +177,20 @@ export const LiveAuctionView: React.FC<LiveAuctionViewProps> = ({
     );
   }
 
-  const nextBidAmount = getNextBidAmount(currentAuctionState.currentBidCr, currentPlayer.basePriceCr);
+  const hasHighestBidder = Boolean(currentAuctionState.highestBidderTeamId);
+  const isCurrentHighestBidder = myTeam?.teamId === currentAuctionState.highestBidderTeamId;
+  const nextBidAmount = getNextBidAmount(currentAuctionState.currentBidCr, currentPlayer.basePriceCr, hasHighestBidder);
 
   // Validate if current user can bid
-  const myValidation = myTeam ? validateBid(myTeam, currentPlayer, nextBidAmount, rules) : { valid: false, reason: 'You do not own a team.' };
+  const myValidation = myTeam ? validateBid(myTeam, currentPlayer, nextBidAmount, rules) : { valid: false, reason: 'You do not own an active franchise.' };
 
   const handleBid = async (amount: number) => {
     if (!myTeam) {
-      setBidError('You must be assigned to an active franchise to bid.');
+      setBidError('You must select and control an active franchise to bid.');
+      return;
+    }
+    if (isCurrentHighestBidder) {
+      setBidError('Your franchise already holds the highest bid!');
       return;
     }
     const val = validateBid(myTeam, currentPlayer, amount, rules);
@@ -466,55 +472,102 @@ export const LiveAuctionView: React.FC<LiveAuctionViewProps> = ({
             )}
 
             {/* Quick Bid Action Buttons */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
-              {/* Primary Next Bid Button */}
-              <button
-                onClick={() => handleBid(nextBidAmount)}
-                disabled={
-                  biddingInProgress ||
-                  currentAuctionState.roundStatus !== 'bidding' ||
-                  !myValidation.valid ||
-                  myTeam?.status === 'abandoned' ||
-                  myTeam?.isActive === false
-                }
-                className="sm:col-span-2 py-3 px-4 rounded-xl font-display font-black text-base uppercase tracking-wider bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-amber-500/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <ArrowUpRight className="w-5 h-5" />
-                <span>Bid ₹{nextBidAmount.toFixed(2)} Cr</span>
-              </button>
+            {!myTeam ? (
+              <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs text-center">
+                <span className="font-semibold">Spectator Mode:</span> You haven't claimed an active franchise. Only owners of an active franchise can raise the bidding paddle.
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                  {/* Primary Next Bid Button or Highest Bidder Badge */}
+                  {isCurrentHighestBidder ? (
+                    <div className="sm:col-span-2 py-3 px-4 rounded-xl font-display font-bold text-sm uppercase tracking-wider bg-emerald-500/20 border border-emerald-500/50 text-emerald-300 flex items-center justify-center gap-2 shadow-sm">
+                      <Check className="w-5 h-5 text-emerald-400" />
+                      <span>You Hold Highest Bid (₹{currentAuctionState.currentBidCr.toFixed(2)} Cr)</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleBid(nextBidAmount)}
+                      disabled={
+                        biddingInProgress ||
+                        currentAuctionState.roundStatus !== 'bidding' ||
+                        !myValidation.valid ||
+                        myTeam?.status === 'abandoned' ||
+                        myTeam?.isActive === false
+                      }
+                      className="sm:col-span-2 py-3 px-4 rounded-xl font-display font-black text-base uppercase tracking-wider bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 shadow-lg shadow-amber-500/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <ArrowUpRight className="w-5 h-5" />
+                      <span>Bid ₹{nextBidAmount.toFixed(2)} Cr</span>
+                    </button>
+                  )}
 
-              {/* Jump Bid +0.25 Cr */}
-              <button
-                onClick={() => handleBid(Number((nextBidAmount + 0.25).toFixed(2)))}
-                disabled={
-                  biddingInProgress ||
-                  currentAuctionState.roundStatus !== 'bidding' ||
-                  !myValidation.valid ||
-                  myTeam?.status === 'abandoned' ||
-                  myTeam?.isActive === false
-                }
-                className="py-3 px-3 rounded-xl font-bold text-xs bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-amber-400/50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                +₹0.25 Cr
-              </button>
+                  {/* Jump Bid +0.25 Cr */}
+                  <button
+                    onClick={() => handleBid(Number((nextBidAmount + 0.25).toFixed(2)))}
+                    disabled={
+                      biddingInProgress ||
+                      isCurrentHighestBidder ||
+                      currentAuctionState.roundStatus !== 'bidding' ||
+                      !myValidation.valid ||
+                      myTeam?.status === 'abandoned' ||
+                      myTeam?.isActive === false
+                    }
+                    className="py-3 px-3 rounded-xl font-bold text-xs bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-amber-400/50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    +₹0.25 Cr
+                  </button>
 
-              {/* Jump Bid +0.50 Cr */}
-              <button
-                onClick={() => handleBid(Number((nextBidAmount + 0.50).toFixed(2)))}
-                disabled={
-                  biddingInProgress ||
-                  currentAuctionState.roundStatus !== 'bidding' ||
-                  !myValidation.valid ||
-                  myTeam?.status === 'abandoned' ||
-                  myTeam?.isActive === false
-                }
-                className="py-3 px-3 rounded-xl font-bold text-xs bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-amber-400/50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                +₹0.50 Cr
-              </button>
-            </div>
+                  {/* Jump Bid +0.50 Cr */}
+                  <button
+                    onClick={() => handleBid(Number((nextBidAmount + 0.50).toFixed(2)))}
+                    disabled={
+                      biddingInProgress ||
+                      isCurrentHighestBidder ||
+                      currentAuctionState.roundStatus !== 'bidding' ||
+                      !myValidation.valid ||
+                      myTeam?.status === 'abandoned' ||
+                      myTeam?.isActive === false
+                    }
+                    className="py-3 px-3 rounded-xl font-bold text-xs bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 hover:border-amber-400/50 transition-all active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    +₹0.50 Cr
+                  </button>
+                </div>
 
-            {/* Host Live Auction Controls */}
+                {/* Custom Bid Input */}
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="number"
+                    step="0.05"
+                    min={nextBidAmount}
+                    max={myTeam.remainingPurse}
+                    value={customBidAmount}
+                    onChange={(e) => setCustomBidAmount(e.target.value)}
+                    placeholder={`Custom Bid (Min ₹${nextBidAmount.toFixed(2)} Cr)`}
+                    disabled={currentAuctionState.roundStatus !== 'bidding' || isCurrentHighestBidder}
+                    className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400 placeholder:text-slate-500"
+                  />
+                  <button
+                    onClick={() => {
+                      const val = parseFloat(customBidAmount);
+                      if (!isNaN(val) && val >= nextBidAmount) {
+                        handleBid(Number(val.toFixed(2)));
+                        setCustomBidAmount('');
+                      } else {
+                        setBidError(`Custom bid must be at least ₹${nextBidAmount.toFixed(2)} Cr.`);
+                      }
+                    }}
+                    disabled={!customBidAmount || parseFloat(customBidAmount) < nextBidAmount || currentAuctionState.roundStatus !== 'bidding' || isCurrentHighestBidder}
+                    className="px-3.5 py-2 bg-slate-800 hover:bg-amber-500 hover:text-slate-950 text-amber-400 font-bold text-xs rounded-xl border border-slate-700 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Place Custom Bid
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Host Live Auction Controls (Hammer Sold & Pass/Unsold removed per instructions) */}
             {isHost && (
               <div className="mt-4 pt-3.5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
                 <span className="text-[11px] font-mono text-slate-500 uppercase">
@@ -528,23 +581,6 @@ export const LiveAuctionView: React.FC<LiveAuctionViewProps> = ({
                   >
                     {currentAuctionState.roundStatus === 'paused' ? <Play className="w-3.5 h-3.5 text-emerald-400" /> : <Pause className="w-3.5 h-3.5 text-amber-400" />}
                     <span>{currentAuctionState.roundStatus === 'paused' ? 'Resume' : 'Pause'}</span>
-                  </button>
-
-                  <button
-                    onClick={() => onSellPlayer(false)}
-                    disabled={!currentAuctionState.highestBidderTeamId}
-                    className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 transition-colors disabled:opacity-40"
-                  >
-                    <Gavel className="w-3.5 h-3.5" />
-                    <span>Hammer Sold</span>
-                  </button>
-
-                  <button
-                    onClick={onMarkUnsold}
-                    className="px-2.5 py-1.5 rounded-lg bg-rose-600/80 hover:bg-rose-500 text-white text-xs font-semibold flex items-center gap-1 transition-colors"
-                  >
-                    <XCircle className="w-3.5 h-3.5" />
-                    <span>Pass / Unsold</span>
                   </button>
 
                   {onTriggerBotBid && (
